@@ -1,0 +1,570 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon May 25 20:51:24 2020
+@author: macbook
+"""
+
+import arftools as a
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import cm
+import pandas as pd
+import re
+
+
+import random
+from sklearn.pipeline import Pipeline
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.linear_model import Perceptron
+from sklearn import svm,multiclass, model_selection
+import sklearn
+
+
+def svm_gridSearch(trainx, trainy,kernel):
+    """ Finding the best parameters for this data and for this kernel
+    :param trainx: Contains examples of the learning base
+    :param trainy: Learning Base Labels
+    :param kernel: the kernel of SVM
+
+    """
+
+    grid = {'C': [1, 5, 10, 15, 20, 50, 100],
+            'max_iter': [4000,8000,10000],
+            'kernel': [kernel],
+            'gamma': [0.0001, 0.001, 0.01, 0.1],
+            'degree':[1,3,5,7],
+            'shrinking':[True,False]
+           }
+
+    clf = svm.SVC()
+    clf = model_selection.GridSearchCV(clf, grid, n_jobs=-1,cv=5)
+    clf.fit(trainx, trainy)   
+    return clf.best_params_
+
+def SVM( C=10, degree=3,gamma='scale', kernel='linear',  max_iter=100,data_USPS=False,data_type=0, epsilon=0.3,probability=True):  # idk si j'ai pris tt les parametres possible 
+    """ 
+    :param data_type: 0: melange 2 gaussiennes, 1: melange 4 gaussiennes, 2:echequier
+    :param epsilon: bruit dans les donnees
+    :param C: penality
+    :param kernel: kernel utilisé
+    :param probability: Booléen permettant l'utilisation de la frontière ou nn.
+    :param max_iter: Maximum d'itérations
+    :param data_USPS: Booléen permettant l'utilisation des données USPS ou bien les données artificielles
+    """
+    if(not data_USPS):
+        trainx, trainy = a.gen_arti(nbex=1000, data_type=data_type, epsilon=epsilon)
+        testx, testy = a.gen_arti(nbex=1000, data_type=data_type, epsilon=epsilon)
+    else:
+        trainx , trainy = a.load_usps ( "USPS_train.txt" )
+        testx , testy = a.load_usps ( "USPS_test.txt" )
+
+    s = sklearn.svm.SVC(C=C, kernel=kernel,degree=degree,gamma=gamma, probability=probability, max_iter=max_iter)
+
+    s.fit(trainx, trainy)
+
+    err_train = 1 - s.score(trainx, trainy)
+    err_test = 1 - s.score(testx, testy)
+
+    print("Erreur : train %f, test %f\n" % (err_train, err_test))
+    if (not data_USPS):
+        if probability:
+            def f(x): return s.predict_proba(x)[:, 0]
+        else:
+            def f(x): return s.decision_function(x)
+
+        a.plot_frontiere_proba(testx,lambda x : s.predict_proba( x )[ : , 0 ],step =50)
+        a.plot_data(testx,testy)
+        plt.title("using the kernel: "+kernel)
+    return s
+
+def multiClass(trainx, trainy, testx, testy):
+    
+    oneVsOne = multiclass.OneVsOneClassifier(svm.LinearSVC(max_iter=16000))
+    oneVsAll = multiclass.OneVsRestClassifier(svm.LinearSVC(max_iter=16000))
+
+    oneVsOne.fit(trainx, trainy)
+    oneVsOneTrainErr = 1 - oneVsOne.score(trainx, trainy)
+    oneVsOneTestErr = 1 - oneVsOne.score(testx, testy)
+
+    oneVsAll.fit(trainx, trainy)
+    oneVsAllTrainErr= 1 -  oneVsAll.score(trainx, trainy)
+    oneVsAllTestErr = 1 - oneVsAll.score(testx, testy)
+
+    print("L'erreur en train pour oneVsOne :"+str(oneVsOneTrainErr)+" et pour oneVsAll :"+str(oneVsAllTrainErr))
+    print("L'erreur en test de oneVsOne :"+str(oneVsOneTestErr)+" et pour oneVsAll :"+str(oneVsAllTestErr))
+
+def to_raw_text(string):
+    """returns the input string without punctuation and without separators"""
+    # list of characters to delete
+    deletion = " ,.!?/&-:;@'..."
+    return ''.join(ch for ch in re.split("["+"\\".join(deletion)+"]", string) if ch)
+
+
+def subseq(x, u):
+    """returns all substrings u in x"""
+    
+    # list of substrings, each substring is represented by a list of indexes (in x) of character that compose it
+    occurences = []
+    
+    
+    list_x = list(x)
+    list_u = list(u)
+    
+    # u is included in x
+    if (len(list_u)>len(list_x)):
+        print("error")
+        
+    # we test all the subsequences of length len(u), without gaps
+    for i in range(len(list_x)-len(list_u)):
+        # we extract a subsequence 
+        subseq = list_x[i:i+len(list_u)]
+        # if we find a sub sequence which corresponds to u, we return it
+        if subseq == list_u:
+            occurences.append(list(range(i,i+len(list_u))))  
+    return occurences
+
+def get_words(corpus,n):
+    """returns all sub-sequences of length n in a corpus, without gaps"""
+    result = set()
+    for text in corpus:
+        # we remove the separators
+        text_list = list(to_raw_text(text))
+        # we build all the possible words of length n
+        for i in range(len(text_list)-n):
+            result.add(''.join(text_list[i:i+n]))
+    return list(result)
+
+def stringKernel(s,t,n,alpha = 0.5):
+    """returns the dot product resulting from the string kernel"""
+    # we recover the dictionary of sub-sequences of size n in the sentence s
+    # a term of the dot product will be zero if a subsequence does not appear in s or in t
+    dico_w = get_words([s],n)
+    
+    # we calculate the formula of the string kernel
+    res = 0
+    
+    # for each subsequence in s
+    for u in dico_w:
+        l_s = subseq(s, u)
+        l_t = subseq(t, u)
+        # if this sub sequence appears in t, otherwise the term is equal to 0 in the dot product
+        for j in l_t:
+            for i in l_s:
+                res = res + pow(alpha, (j[len(j)-1]-j[0]+1)+(i[len(i)-1]-i[0]+1))
+    return res 
+
+def get_similarity_matrix(train_x,n,alpha=0.1):
+    """returns the similarity matrix of the string kernel"""
+    
+    # matrix of size n * n, each citation with all the others
+    # for each combination we compute the string kernel
+    result = np.zeros((train_x.shape[0],train_x.shape[0]))
+    for i in range(train_x.shape[0]):
+        for j in range(train_x.shape[0]):
+            result[i,j] = stringKernel(train_x[i],train_x[j],n,alpha)
+    return result
+
+if __name__ == "__main__":
+    """
+    # Introduction : Module scikit-learn 
+    print('**********************************************')
+    print("Introduction : Module scikit-learn")
+    print('**********************************************')
+    # Comparaison entre le perceptron qu'on implémenté et celui de scikit learn
+    trainx0,trainy0 =  a.gen_arti(nbex=800,data_type=0 ,epsilon=0.5)
+    testx0,testy0 =  a.gen_arti(nbex=800,data_type=0 ,epsilon=0.5)
+    trainx1,trainy1 =  a.gen_arti(nbex=800,data_type=1 ,epsilon=0.5)
+    testx1,testy1 =  a.gen_arti(nbex=800,data_type=1 ,epsilon=0.5)
+    trainx2,trainy2 =  a.gen_arti(nbex=800,data_type=2 ,epsilon=0.5)
+    testx2,testy2 =  a.gen_arti(nbex=800,data_type=2 ,epsilon=0.5)
+
+    clf = Perceptron(random_state=0)
+    perceptron = a.Lineaire(a.mse,a.mse_g,max_iter=3,eps=0.1)
+    perceptron.fit(trainx0,trainy0)
+    clf.fit(trainx0,trainy0)
+    print("En utilisant Perceptron implémenté en TME3 avec data de type 0, l'erreur : train %f, test %f"% (perceptron.score(trainx0,trainy0),perceptron.score(testx0,testy0)))
+    print("En utilisant le Perceptron de scikit-learn avec data de type 0, l'erreur: train %f, test %f"% (1-clf.score(trainx0,trainy0),1-clf.score(testx0,testy0)))
+    plt.figure()
+    plt.subplot(3, 2, 1)
+    a.plot_frontiere(trainx0,perceptron.predict,200)
+    a.plot_data(trainx0,trainy0)
+    plt.title('Scikit-learn Perceptron')
+
+    plt.subplot(3, 2, 2)
+    a.plot_frontiere(trainx0,clf.predict,200)
+    a.plot_data(trainx0,trainy0)
+    plt.title('Implemented Perceptron')
+
+    clf = Perceptron(random_state=0)
+    perceptron = a.Lineaire(a.mse,a.mse_g,max_iter=3,eps=0.1)
+    perceptron.fit(trainx1,trainy1)
+    clf.fit(trainx1,trainy1)
+    print("En utilisant Perceptron implémenté en TME3 avec data de type 1, l'erreur : train %f, test %f"% (perceptron.score(trainx1,trainy1),perceptron.score(testx1,testy1)))
+    print("En utilisant le Perceptron de scikit-learn avec data de type 1, l'erreur: train %f, test %f"% (1-clf.score(trainx1,trainy1),1-clf.score(testx1,testy1)))
+   
+
+    plt.subplot(3, 2, 3)
+    a.plot_frontiere(trainx1,perceptron.predict,200)
+    a.plot_data(trainx1,trainy1)
+
+    plt.subplot(3, 2, 4)
+    a.plot_frontiere(trainx1,clf.predict,200)
+    a.plot_data(trainx1,trainy1)
+
+    clf = Perceptron(random_state=0)
+    perceptron = a.Lineaire(a.mse,a.mse_g,max_iter=3,eps=0.1)
+    perceptron.fit(trainx2,trainy2)
+    clf.fit(trainx2,trainy2)
+    print("En utilisant Perceptron implémenté en TME3 avec data de type 2, l'erreur : train %f, test %f"% (perceptron.score(trainx2,trainy2),perceptron.score(testx2,testy2)))
+    print("En utilisant le Perceptron de scikit-learn avec data de type 2, l'erreur: train %f, test %f"% (1-clf.score(trainx2,trainy2),1-clf.score(testx2,testy2)))
+   
+    plt.subplot(3, 2, 5)
+    a.plot_frontiere(trainx2,perceptron.predict,200)
+    a.plot_data(trainx2,trainy2)
+
+    plt.subplot(3, 2, 6)
+    a.plot_frontiere(trainx2,clf.predict,200)
+    a.plot_data(trainx2,trainy2)
+    plt.show()
+    """
+
+
+
+
+
+
+    """
+    #-------------------- SVM experiences
+    print("1 - utilisant le kernel linéaire ")
+    print('Sur données artificielles ,separables linéairement, non bruité') 
+    plt.figure(1,figsize=(10,10))
+    plt.subplot(2,2,1)
+    m1 = SVM( C=10, kernel='linear',  max_iter=100,data_USPS=False,data_type=0, epsilon=0,probability=True)
+    plt.subplot(2,2,2)
+    print('Sur données artificielles ,separables linéairement,  bruité') 
+    m1 = SVM( C=10, kernel='linear',  max_iter=100,data_USPS=False,data_type=0, epsilon=0.9,probability=True)
+    plt.show()
+
+    print('Sur données artificielles ,non separables linéairement') 
+    # non separables linéairement, non bruité, kernel linear
+    m2 = SVM( C=10, kernel='linear',  max_iter=100,data_USPS=False,data_type=1, epsilon=0,probability=True)
+    plt.show()
+
+
+    print("En utilisant le kernel polynomial")
+    # non separables linéairement, non bruité, kernel polynomial
+    print('Sur données artificielles ,non separables linéairement') 
+    plt.figure(1,figsize=(10,10))
+    i = 1
+    for d in [1, 2, 3, 4]:
+        plt.subplot(2,2,i)
+        i +=1
+        m = SVM( C=10, kernel='poly',degree=d,  max_iter=100,data_USPS=False,data_type=1, epsilon=0,probability=True)
+        plt.title("d = "+str(d)+"\n"+"nbre vecteurs supports = "+str(len(m.support_vectors_)))
+    plt.show()
+    
+
+    print("En utilisant le kernel gaussien")
+    # non separables linéairement, non bruité, kernel rbf
+    print('Sur données artificielles ,non separables linéairement') 
+
+    m = SVM( C=10, kernel='rbf',gamma=10,  max_iter=100,data_USPS=False,data_type=2, epsilon=0,probability=True)
+    plt.show()
+    
+    print('Sur données artificielles ,non separables linéairement exemple echiquier') 
+    # non separables linéairement, non bruité, kernel rbf exemple echiquier
+    # Affichage
+    plt.figure(1,figsize=(15,15))
+    i = 1
+    for (gamma, c) in [(0.1,0.01), (0.1,1), (0.1,10), (1,0.01), (1,1), (1,10), (10,0.01), (10,1), (10,10)]:
+        plt.subplot(3,3,i)
+        i +=1
+        m = SVM( C=c, kernel='rbf',gamma=gamma,  max_iter=100,data_USPS=False,data_type=0, epsilon=1,probability=True)
+        plt.title("gamma = "+str(gamma)+" C = "+str(c)+"\n"+"nbre vecteurs supports = "+str(len(m.support_vectors_)))
+    plt.show()
+
+
+    print("Étude de nombre de vecteurs supports")
+    noisy_not = {}
+    m1 = SVM( C=10, kernel='linear',max_iter=100,data_USPS=False,data_type=0,epsilon=0,probability=True)
+    noisy_not["2 gaussienne non bruité | linear"] = len(m1.support_vectors_)
+    m2 = SVM( C=10, kernel='linear',max_iter=100,data_USPS=False,data_type=0,epsilon=0.9,probability=True)
+    noisy_not["2 gaussienne bruité | linear"] = len(m2.support_vectors_)
+    plt.clf()
+    plt.bar(noisy_not.keys(),noisy_not.values(), color='g', width = 0.3)
+    plt.title("Nombre de Vecteurs supports")
+    plt.show()
+    print(noisy_not)
+
+
+    print("*********************************************")
+    print("Sur les données USPS")
+    linear = SVM( C=1, kernel='linear',  max_iter=100,data_USPS=True, epsilon=0,probability=True)
+    plt.show()
+    poly = SVM( C=1, kernel='poly',  max_iter=100,data_USPS=True, epsilon=0,probability=True)
+    plt.show()
+    rbf = SVM( C=1, kernel='rbf',  max_iter=100,data_USPS=True, epsilon=0,probability=True)
+    plt.show()
+    """
+
+
+
+
+
+
+
+
+    """
+    # ------------------------- Grid Search
+    print("## loading data")
+    # artificiel data
+    trainx0,trainy0 =  a.gen_arti(nbex=2000,data_type=0 ,epsilon=0.5)
+    trainx1,trainy1 =  a.gen_arti(nbex=2000,data_type=1 ,epsilon=0.5)
+    trainx2,trainy2 =  a.gen_arti(nbex=2000,data_type=2 ,epsilon=0.5)
+    testx0,testy0 =  a.gen_arti(nbex=700,data_type=0 ,epsilon=0.5)
+    testx1,testy1 =  a.gen_arti(nbex=700,data_type=1 ,epsilon=0.5)
+    testx2,testy2 =  a.gen_arti(nbex=700,data_type=2 ,epsilon=0.5)
+    # USPS data
+    trainx71 , trainy71 = a.load_usps ("USPS_train.txt")
+    trainx71,trainy71= a.get_two_classes(trainx71,trainy71,3,8)
+
+    testx71 , testy71 = a.load_usps ("USPS_test.txt")
+    testx71,testy71= a.get_two_classes(testx71,testy71,3,8)
+
+
+
+    print("## loading and filtring data succesfully")
+    print("---------------------------------------\n searching for the best parameter for each kernel using grid search")
+    """
+    """
+    result=" "
+    for kernel in ['linear', 'rbf', 'poly', 'sigmoid' ]:
+        result = result+'for the kernel '+kernel+"\n"
+        result = result+"   best parameter using data type 0 are: "+str(svm_gridSearch(trainx0, trainy0,kernel))+"\n"
+        result = result+"   best parameter using data type 1 are: "+str(svm_gridSearch(trainx1, trainy1,kernel))+"\n"
+        result = result+"   best parameter using data type 2 are: "+str(svm_gridSearch(trainx2, trainy2,kernel))+"\n"
+        result = result+"   best parameter using data USPS and the classes 7 and 1 are: "+str(svm_gridSearch(trainx71, trainy71,kernel))+"\n"
+
+    print("------------ optimization finished , the best parameters are : \n"+result)
+    """
+
+
+
+
+    """
+    print("------------ Après avoir les best params de chaque modèle ")
+    err_train0_linear=[]
+    err_test0_linear=[]
+    err_train1_linear=[]
+    err_test1_linear=[]
+    err_train2_linear=[]
+    err_test2_linear=[]
+    err_trainUSPS_linear=[]
+    err_testUSPS_linear=[]
+    nb_obs=[]
+    # Courbe d'erreur pour le kernel linear
+ 
+    for i in range (200,2000,100):
+        nb_obs.append(i)
+
+        s = sklearn.svm.SVC(C=1, degree= 1, gamma= 0.0001, kernel='linear', max_iter= 4000, shrinking= True)
+        s.fit(trainx0[:i], trainy0[:i])
+        err_train0_linear.append( 1 - s.score(trainx0[:i], trainy0[:i]))
+        err_test0_linear.append( 1 - s.score(testx0, testy0))
+
+        s = sklearn.svm.SVC(C=20, degree= 1, gamma= 0.0001, kernel='linear', max_iter= 10000, shrinking= True)     
+        s.fit(trainx1[:i], trainy1[:i])
+        err_train1_linear.append( 1 - s.score(trainx1[:i], trainy1[:i]))
+        err_test1_linear.append( 1 - s.score(testx1, testy1))
+
+        s = sklearn.svm.SVC(C=15, degree= 1, gamma= 0.0001, kernel='linear', max_iter= 8000, shrinking= True)
+        s.fit(trainx2[:i], trainy2[:i])
+        err_train2_linear.append( 1 - s.score(trainx2[:i], trainy2[:i]))
+        err_test2_linear.append( 1 - s.score(testx2, testy2))
+
+        s = sklearn.svm.SVC(C=1, degree= 1, gamma= 0.0001, kernel='linear', max_iter= 4000, shrinking= True)
+        s.fit(trainx71[:i], trainy71[:i])
+        err_trainUSPS_linear.append( 1 - s.score(trainx71[:i], trainy71[:i]))
+        err_testUSPS_linear.append( 1 - s.score(testx71, testy71))
+    plt.subplot(1, 2, 1)
+    plt.plot(nb_obs,err_train0_linear,label="type 0")
+    plt.plot(nb_obs,err_train1_linear,label="type 1")
+    plt.plot(nb_obs,err_train2_linear,label="type 2")
+    plt.plot(nb_obs,err_trainUSPS_linear,label="type USPS")
+    plt.ylabel("l'erreur")
+    plt.xlabel("nombre d'exemples pour l'apprentissage")
+    plt.legend()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(nb_obs,err_test0_linear,label="type 0")
+    plt.plot(nb_obs,err_test1_linear,label="type 1")
+    plt.plot(nb_obs,err_test2_linear,label="type 2")
+    plt.plot(nb_obs,err_testUSPS_linear,label="type USPS")
+   
+    plt.xlabel("nombre d'exemples pour l'apprentissage")
+    plt.legend()
+    plt.show()
+    """
+    """
+    # les courbes d'erreur pour le kernel polynomial
+    for i in range (200,2000,100):
+        nb_obs.append(i)
+
+        s = sklearn.svm.SVC(C=1, degree= 1, gamma= 0.0001, kernel='poly', max_iter= 4000, shrinking= True)
+        s.fit(trainx0[:i], trainy0[:i])
+        err_train0_linear.append( 1 - s.score(trainx0[:i], trainy0[:i]))
+        err_test0_linear.append( 1 - s.score(testx0, testy0))
+
+        s = sklearn.svm.SVC(C=10, degree= 2, gamma= 0.1, kernel='poly', max_iter=4000, shrinking= True)     
+        s.fit(trainx1[:i], trainy1[:i])
+        err_train1_linear.append( 1 - s.score(trainx1[:i], trainy1[:i]))
+        err_test1_linear.append( 1 - s.score(testx1, testy1))
+
+        s = sklearn.svm.SVC(C=20, degree= 4, gamma= 0.1, kernel='poly', max_iter= 10000, shrinking= True)
+        s.fit(trainx2[:i], trainy2[:i])
+        err_train2_linear.append( 1 - s.score(trainx2[:i], trainy2[:i]))
+        err_test2_linear.append( 1 - s.score(testx2, testy2))
+
+        s = sklearn.svm.SVC(C=15, degree= 2, gamma= 0.01, kernel='poly', max_iter= 4000, shrinking= True)
+        s.fit(trainx71[:i], trainy71[:i])
+        err_trainUSPS_linear.append( 1 - s.score(trainx71[:i], trainy71[:i]))
+        err_testUSPS_linear.append( 1 - s.score(testx71, testy71))
+    plt.subplot(1, 2, 1)
+    plt.plot(nb_obs,err_train0_linear,label="type 0")
+    plt.plot(nb_obs,err_train1_linear,label="type 1")
+    plt.plot(nb_obs,err_train2_linear,label="type 2")
+    plt.plot(nb_obs,err_trainUSPS_linear,label="type USPS")
+    plt.ylabel("l'erreur")
+    plt.xlabel("nombre d'exemples pour l'apprentissage")
+    plt.legend()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(nb_obs,err_test0_linear,label="type 0")
+    plt.plot(nb_obs,err_test1_linear,label="type 1")
+    plt.plot(nb_obs,err_test2_linear,label="type 2")
+    plt.plot(nb_obs,err_testUSPS_linear,label="type USPS")
+   
+    plt.xlabel("nombre d'exemples pour l'apprentissage")
+    plt.legend()
+    plt.show()
+    """
+    """
+    # Courbe d'erreur pour le kernel gaussien
+    for i in range (200,2000,100):
+        nb_obs.append(i)
+
+        s = sklearn.svm.SVC(C=1, degree= 1, gamma= 0.0001, kernel='rbf', max_iter= 4000, shrinking= True)
+        s.fit(trainx0[:i], trainy0[:i])
+        err_train0_linear.append( 1 - s.score(trainx0[:i], trainy0[:i]))
+        err_test0_linear.append( 1 - s.score(testx0, testy0))
+
+        s = sklearn.svm.SVC(C=1, degree= 1, gamma= 0.1, kernel='rbf', max_iter=4000, shrinking= True)     
+        s.fit(trainx1[:i], trainy1[:i])
+        err_train1_linear.append( 1 - s.score(trainx1[:i], trainy1[:i]))
+        err_test1_linear.append( 1 - s.score(testx1, testy1))
+
+        s = sklearn.svm.SVC(C=20, degree= 5,gamma=1, kernel='rbf', max_iter= 10000, shrinking= True)
+        s.fit(trainx2[:i], trainy2[:i])
+        err_train2_linear.append( 1 - s.score(trainx2[:i], trainy2[:i]))
+        err_test2_linear.append( 1 - s.score(testx2, testy2))
+
+        s = sklearn.svm.SVC(C=1, degree= 1, gamma= 0.001, kernel='rbf', max_iter= 4000, shrinking= True)
+        s.fit(trainx71[:i], trainy71[:i])
+        err_trainUSPS_linear.append( 1 - s.score(trainx71[:i], trainy71[:i]))
+        err_testUSPS_linear.append( 1 - s.score(testx71, testy71))
+    plt.subplot(1, 2, 1)
+    plt.plot(nb_obs,err_train0_linear,label="type 0")
+    plt.plot(nb_obs,err_train1_linear,label="type 1")
+    plt.plot(nb_obs,err_train2_linear,label="type 2")
+    plt.plot(nb_obs,err_trainUSPS_linear,label="type USPS")
+    plt.ylabel("l'erreur")
+    plt.xlabel("nombre d'exemples pour l'apprentissage")
+    plt.legend()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(nb_obs,err_test0_linear,label="type 0")
+    plt.plot(nb_obs,err_test1_linear,label="type 1")
+    plt.plot(nb_obs,err_test2_linear,label="type 2")
+    plt.plot(nb_obs,err_testUSPS_linear,label="type USPS")
+   
+    plt.xlabel("nombre d'exemples pour l'apprentissage")
+    plt.legend()
+    plt.show()
+    """
+
+
+
+
+
+
+
+    """
+    # -------------------Apprentissage multi-classe
+    print( "OneVsOne  vs  OneVsAll :")
+    trainx , trainy = a.load_usps ( "USPS_train.txt" )
+    testx , testy = a.load_usps ( "USPS_test.txt" )
+    multiClass(trainx, trainy, testx, testy)
+    """
+
+
+
+
+
+
+    """
+    #--------------------------- String kernel
+    print("teste de String kernel \n loading data")
+    # corpus contenant des quotes et leur auteur
+    corpus = pd.read_csv("QUOTE.csv")
+    # on ne garde que deux auteurs
+    corpus_clean = corpus[corpus["Auther"].isin(["A. A. Milne","Abel Ferrara"])]
+    # classification, en -1 et 1
+    corpus_clean["Auther"].replace({"A. A. Milne":1,"Abel Ferrara":-1}, inplace=True)
+
+    # données netoyées
+    features = corpus_clean["quote"].to_numpy()
+    target = corpus_clean["Auther"].to_numpy()
+    similarity_matrix = get_similarity_matrix(features,4,1)
+    fig, ax = plt.subplots(figsize=(10,10))
+    im = ax.imshow(similarity_matrix)
+
+    # display the classes of each qoute
+
+    ax.set_xticks(np.arange(len(target)))
+    ax.set_yticks(np.arange(len(target)))
+
+    ax.set_xticklabels(map(str, target))
+    ax.set_yticklabels(map(str, target))
+
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+            rotation_mode="anchor")
+
+    ax.set_title("Matrice de similarité | deux auteurs | string kernel")
+    fig.tight_layout()
+    plt.show()
+
+
+    print("**********************************************")
+    print("Apprentisage")
+    # we randomly separate the train set and the test set (1/3 for the test and 2/3 for the train) 
+
+    shuffeld_ind = list(range(0,features.shape[0]))
+
+    random.shuffle(shuffeld_ind)
+
+    train_ind = shuffeld_ind[len(shuffeld_ind)//3:]
+    test_ind = shuffeld_ind[:len(shuffeld_ind)//3]
+
+    train_x = similarity_matrix[train_ind]
+    train_y = target[train_ind]
+
+    test_x = similarity_matrix[test_ind]
+    test_y = target[test_ind]
+    # we train the model
+    model = sklearn.svm.SVC(C=10)
+    model.fit(train_x, train_y)
+    print("L'accuracy est de :",sklearn.metrics.accuracy_score(test_y, model.predict(test_x)))
+    """
